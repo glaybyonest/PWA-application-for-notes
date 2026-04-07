@@ -1,0 +1,69 @@
+<section class="page page-home">
+  <section class="card">
+    <div class="section-header">
+      <h2>Заметки</h2>
+      <div class="page-title-actions">
+        <span id="notes-count" class="badge">0 заметок</span>
+        <button
+          id="push-toggle"
+          class="icon-button push-toggle push-toggle--neutral"
+          type="button"
+          aria-label="Включить уведомления"
+          title="Включить уведомления"
+        >
+          <span class="push-toggle__icon" aria-hidden="true">&#128276;</span>
+          <span id="push-indicator" class="push-indicator push-indicator--neutral" aria-hidden="true"></span>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <div class="forms-grid">
+    <section class="card form-card">
+      <div class="section-header">
+        <h2>Обычная заметка</h2>
+      </div>
+
+      <form id="note-form" class="note-form" novalidate>
+        <div class="field">
+          <label for="note-text">Текст заметки</label>
+          <textarea id="note-text" name="text" maxlength="500" required></textarea>
+        </div>
+
+        <div class="button-row">
+          <button class="button button--primary button--icon" type="submit" aria-label="Добавить заметку">+</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="card form-card">
+      <div class="section-header">
+        <h2>Заметка с напоминанием</h2>
+      </div>
+
+      <form id="reminder-form" class="note-form" novalidate>
+        <div class="field">
+          <label for="reminder-text">Текст напоминания</label>
+          <textarea id="reminder-text" name="reminder-text" maxlength="500" required></textarea>
+        </div>
+
+        <div class="field">
+          <label for="reminder-time">Дата и время напоминания</label>
+          <input id="reminder-time" name="reminder-time" type="datetime-local" required />
+        </div>
+
+        <div class="button-row">
+          <button class="button button--primary button--icon" type="submit" aria-label="Добавить с напоминанием">+</button>
+        </div>
+      </form>
+    </section>
+  </div>
+
+  <section class="card">
+    <div class="section-header">
+      <h2>Список заметок</h2>
+    </div>
+
+    <ul id="notes-list" class="notes-list"></ul>
+  </section>
+</section>

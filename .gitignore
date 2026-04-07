@@ -1,0 +1,16 @@
+cert/*.pem
+cert/*.key
+.env
+.env.local
+bin/
+dist/
+tmp/
+.gocache/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.out

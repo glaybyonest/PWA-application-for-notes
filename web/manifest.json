@@ -1,0 +1,44 @@
+{
+  "name": "Учебные заметки и задачи",
+  "short_name": "Заметки",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f5efe5",
+  "theme_color": "#1f6b5b",
+  "description": "PWA-приложение заметок и задач с офлайн-режимом, WebSocket и push-уведомлениями на Go.",
+  "orientation": "portrait-primary",
+  "scope": "/",
+  "icons": [
+    {
+      "src": "/icons/favicon-128x128.png",
+      "sizes": "128x128",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/favicon-152x152.png",
+      "sizes": "152x152",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/favicon-256x256.png",
+      "sizes": "256x256",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/favicon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
