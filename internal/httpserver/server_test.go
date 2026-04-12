@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -13,9 +14,11 @@ import (
 	"time"
 
 	"frontendandbackend1317/internal/config"
+	"frontendandbackend1317/internal/realtime"
 	"frontendandbackend1317/internal/reminders"
 
 	"github.com/SherClockHolmes/webpush-go"
+	"github.com/gorilla/websocket"
 )
 
 type stubWebSocket struct{}
@@ -154,6 +157,50 @@ func TestSnoozeReminderEndpoint(t *testing.T) {
 	if len(reminder.snoozed) != 1 || reminder.snoozed[0] != "rem-1" {
 		t.Fatalf("expected reminder rem-1 to be snoozed, got %+v", reminder.snoozed)
 	}
+}
+
+func TestWebSocketEndpointUpgrades(t *testing.T) {
+	webDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(webDir, "index.html"), []byte("<!doctype html><title>test</title>"), 0o644); err != nil {
+		t.Fatalf("failed to create temp index: %v", err)
+	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	hub := realtime.NewHub(logger, nil)
+	t.Cleanup(hub.Shutdown)
+
+	handler, err := NewHandler(config.Config{WebDir: webDir}, logger, hub, &stubPush{}, &stubReminder{})
+	if err != nil {
+		t.Fatalf("failed to create handler: %v", err)
+	}
+
+	server := httptest.NewTLSServer(handler)
+	defer server.Close()
+
+	dialer := websocket.Dialer{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
+	wsURL := "wss" + strings.TrimPrefix(server.URL, "https") + "/ws"
+
+	conn, response, err := dialer.Dial(wsURL, nil)
+	if err != nil {
+		body := ""
+		if response != nil && response.Body != nil {
+			payload, readErr := io.ReadAll(response.Body)
+			if readErr == nil {
+				body = string(payload)
+			}
+		}
+		t.Fatalf("failed to upgrade websocket: %v (status=%v body=%q)", err, responseStatus(response), body)
+	}
+	defer conn.Close()
+}
+
+func responseStatus(response *http.Response) int {
+	if response == nil {
+		return 0
+	}
+	return response.StatusCode
 }
 
 func newTestHandler(t *testing.T) http.Handler {

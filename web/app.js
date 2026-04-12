@@ -18,6 +18,7 @@ const state = {
 
 document.addEventListener("DOMContentLoaded", () => {
   bindShellNavigation();
+  bindServiceWorkerMessages();
   window.addEventListener("hashchange", handleRouteChange);
   window.addEventListener("storage", handleStorageSync);
   document.addEventListener("visibilitychange", () => {
@@ -45,6 +46,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   void registerServiceWorker();
   void getAppConfig();
+  void syncCurrentPushSubscription();
   initRealtime();
   handleRouteChange();
 });
@@ -53,6 +55,14 @@ function bindShellNavigation() {
   if (window.location.hash !== "#home") {
     window.location.hash = "#home";
   }
+}
+
+function bindServiceWorkerMessages() {
+  if (!("serviceWorker" in navigator)) {
+    return;
+  }
+
+  navigator.serviceWorker.addEventListener("message", handleServiceWorkerMessage);
 }
 
 function handleRouteChange() {
@@ -356,6 +366,31 @@ function handleStorageSync(event) {
   }
 }
 
+function handleServiceWorkerMessage(event) {
+  const message = event.data;
+  if (!message || typeof message !== "object") {
+    return;
+  }
+
+  if (message.type === "push-received") {
+    const payload = message.payload || {};
+    console.info("Service worker received push payload", payload);
+
+    if (document.visibilityState === "visible" && payload.reminderId && payload.title) {
+      showToast(`Напоминание: ${payload.title}`, "info");
+    }
+    return;
+  }
+
+  if (message.type === "push-notification-failed") {
+    console.error("Service worker failed to show notification", message.error);
+    showToast(
+      "Push получен, но браузер не показал системное уведомление. Проверьте разрешения сайта и уведомления Windows.",
+      "warning",
+    );
+  }
+}
+
 async function initPushControls() {
   const toggle = document.querySelector("#push-toggle");
   if (!toggle) {
@@ -406,6 +441,10 @@ async function syncCurrentPushSubscription() {
 
   const registration = await registerServiceWorker();
   if (!registration) {
+    return null;
+  }
+
+  if (await cleanupDeniedPushSubscription(registration)) {
     return null;
   }
 
@@ -616,6 +655,37 @@ async function unsubscribeFromPush() {
     console.error("Failed to unsubscribe from push", error);
     showToast("Не удалось отключить уведомления.", "error");
   }
+}
+
+async function cleanupDeniedPushSubscription(registration) {
+  if (Notification.permission !== "denied" || !registration) {
+    return false;
+  }
+
+  const subscription = await registration.pushManager.getSubscription();
+  if (!subscription) {
+    state.subscriptionSyncedEndpoint = "";
+    localStorage.removeItem(VAPID_PUBLIC_KEY_STORAGE_KEY);
+    return false;
+  }
+
+  const endpoint = subscription.endpoint;
+
+  try {
+    await subscription.unsubscribe();
+  } catch (error) {
+    console.debug("Failed to unsubscribe denied push subscription in browser", error);
+  }
+
+  try {
+    await postJSON("/api/push/unsubscribe", { endpoint });
+  } catch (error) {
+    console.debug("Failed to unsubscribe denied push subscription on server", error);
+  }
+
+  state.subscriptionSyncedEndpoint = "";
+  localStorage.removeItem(VAPID_PUBLIC_KEY_STORAGE_KEY);
+  return true;
 }
 
 async function registerServiceWorker() {

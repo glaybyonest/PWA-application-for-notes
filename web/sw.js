@@ -98,7 +98,7 @@ self.addEventListener("push", (event) => {
     options.actions = [{ action: "snooze", title: "Отложить на 5 минут" }];
   }
 
-  event.waitUntil(self.registration.showNotification(payload.title, options));
+  event.waitUntil(handlePushEvent(payload, options));
 });
 
 self.addEventListener("notificationclick", (event) => {
@@ -227,6 +227,39 @@ async function handlePushSubscriptionChange(event) {
     });
   } catch (error) {
     console.error("Failed to refresh push subscription", error);
+  }
+}
+
+async function handlePushEvent(payload, options) {
+  await notifyClients({
+    type: "push-received",
+    payload: {
+      title: payload.title || "",
+      body: payload.body || "",
+      url: payload.url || "/",
+      reminderId: payload.reminderId || null,
+    },
+  });
+
+  try {
+    await self.registration.showNotification(payload.title, options);
+  } catch (error) {
+    await notifyClients({
+      type: "push-notification-failed",
+      error: error && typeof error.message === "string" ? error.message : String(error),
+      payload: {
+        title: payload.title || "",
+        reminderId: payload.reminderId || null,
+      },
+    });
+    throw error;
+  }
+}
+
+async function notifyClients(message) {
+  const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+  for (const client of clients) {
+    client.postMessage(message);
   }
 }
 
