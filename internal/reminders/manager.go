@@ -108,16 +108,28 @@ func (m *Manager) Snooze(reminderID string, duration time.Duration) (Reminder, e
 		existing.timer.Stop()
 	}
 
-	existing.reminder.ReminderTime = time.Now().Add(duration).UnixMilli()
+	baseTime := time.Now()
+	reminderTime := time.UnixMilli(existing.reminder.ReminderTime)
+	if reminderTime.After(baseTime) {
+		baseTime = reminderTime
+	}
+
+	updatedTime := baseTime.Add(duration)
+	delay := time.Until(updatedTime)
+	if delay < 0 {
+		delay = 0
+	}
+
+	existing.reminder.ReminderTime = updatedTime.UnixMilli()
 	updated := existing.reminder
-	existing.timer = time.AfterFunc(duration, func() {
+	existing.timer = time.AfterFunc(delay, func() {
 		m.fire(reminderID)
 	})
 
 	m.logger.Info("reminder snoozed",
 		"reminderID", reminderID,
-		"newReminderTime", time.UnixMilli(updated.ReminderTime).Format(time.RFC3339),
-		"delay", duration.String(),
+		"newReminderTime", updatedTime.Format(time.RFC3339),
+		"delay", delay.String(),
 	)
 
 	return updated, nil

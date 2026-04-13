@@ -86,6 +86,47 @@ func TestManagerSnoozeReschedulesReminder(t *testing.T) {
 	}
 }
 
+func TestManagerSnoozeKeepsFutureReminderInFuture(t *testing.T) {
+	notifier := newTestNotifier()
+	manager := NewManager(slog.New(slog.NewTextHandler(io.Discard, nil)), notifier)
+	t.Cleanup(manager.Shutdown)
+
+	reminder := Reminder{
+		ID:           "reminder-2-future",
+		Text:         "Snooze later",
+		ReminderTime: time.Now().Add(600 * time.Millisecond).UnixMilli(),
+	}
+
+	if err := manager.Schedule(reminder); err != nil {
+		t.Fatalf("Schedule returned error: %v", err)
+	}
+
+	time.Sleep(25 * time.Millisecond)
+
+	updated, err := manager.Snooze(reminder.ID, 300*time.Millisecond)
+	if err != nil {
+		t.Fatalf("Snooze returned error: %v", err)
+	}
+	if updated.ReminderTime <= reminder.ReminderTime {
+		t.Fatal("expected snoozed reminder time to stay later than the original schedule")
+	}
+
+	select {
+	case delivered := <-notifier.ch:
+		t.Fatalf("reminder fired too early after snooze: %+v", delivered)
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	select {
+	case delivered := <-notifier.ch:
+		if delivered.ID != reminder.ID {
+			t.Fatalf("unexpected reminder id after future snooze: got %q want %q", delivered.ID, reminder.ID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for future snoozed reminder delivery")
+	}
+}
+
 func TestManagerSnoozeAfterReminderFires(t *testing.T) {
 	notifier := newTestNotifier()
 	manager := NewManager(slog.New(slog.NewTextHandler(io.Discard, nil)), notifier)

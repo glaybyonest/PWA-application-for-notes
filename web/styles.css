@@ -380,6 +380,17 @@ textarea {
   font-weight: 700;
 }
 
+.note-item__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.note-item__action {
+  padding: 10px 14px;
+}
+
 .empty-state {
   margin: 18px 0 0;
   padding: 18px;

@@ -2,11 +2,16 @@ const NOTES_STORAGE_KEY = "pwa-notes-app.notes";
 const CLIENT_ID_STORAGE_KEY = "pwa-notes-app.client-id";
 const VAPID_PUBLIC_KEY_STORAGE_KEY = "pwa-notes-app.vapid-public-key";
 const TOAST_DURATION = 4200;
+const SNOOZE_DELAY_MS = 5 * 60 * 1000;
+const LOCAL_REMINDER_GRACE_MS = 2500;
+const RECENT_REMINDER_DELIVERY_MS = 15000;
 
 const state = {
   appConfigPromise: null,
   currentPage: "home",
+  localReminderTimers: new Map(),
   registrationPromise: null,
+  reminderDeliveries: new Map(),
   subscriptionSyncedEndpoint: "",
   socket: null,
   socketToken: 0,
@@ -89,6 +94,7 @@ async function loadHomeContent() {
     target.innerHTML = await response.text();
     state.currentPage = "home";
     initNotes();
+    void refreshLocalReminderTimers();
     void initPushControls();
     void syncFutureRemindersWithServer();
   } catch (error) {
@@ -107,6 +113,7 @@ function initNotes() {
 
   const noteForm = document.querySelector("#note-form");
   const noteInput = document.querySelector("#note-text");
+  const notesList = document.querySelector("#notes-list");
   const reminderForm = document.querySelector("#reminder-form");
   const reminderText = document.querySelector("#reminder-text");
   const reminderTime = document.querySelector("#reminder-time");
@@ -160,6 +167,28 @@ function initNotes() {
       reminderTime.value = "";
     });
   }
+
+  if (notesList && !notesList.dataset.bound) {
+    notesList.dataset.bound = "true";
+    notesList.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+
+      const button = target.closest("[data-action='snooze-reminder']");
+      if (!button) {
+        return;
+      }
+
+      const reminderId = button.getAttribute("data-reminder-id") || "";
+      if (!reminderId) {
+        return;
+      }
+
+      void handleReminderSnooze(button, reminderId);
+    });
+  }
 }
 
 async function addNote({ text, reminder = null }) {
@@ -182,6 +211,7 @@ async function addNote({ text, reminder = null }) {
   notes.push(note);
   saveNotes(notes);
   renderNotes();
+  void refreshLocalReminderTimers();
 
   const subscription = await syncCurrentPushSubscription().catch((error) => {
     console.debug("Push subscription sync before note creation failed", error);
@@ -235,11 +265,27 @@ function renderNotes() {
     const reminderMarkup = note.reminder
       ? `<p class="note-item__time note-item__time--accent">${escapeHTML(formatDisplayDate(note.reminder))}</p>`
       : "";
+    const actionsMarkup = note.reminder
+      ? `
+          <div class="note-item__actions">
+            <button
+              class="button button--secondary note-item__action"
+              type="button"
+              data-action="snooze-reminder"
+              data-reminder-id="${escapeHTML(note.id)}"
+              aria-label="Отложить напоминание на 5 минут"
+            >
+              Отложить на 5 минут
+            </button>
+          </div>
+        `
+      : "";
 
     item.innerHTML = `
       <p class="note-item__title"></p>
       <p class="note-item__time">${escapeHTML(formatDisplayDate(note.createdAt))}</p>
       ${reminderMarkup}
+      ${actionsMarkup}
     `;
 
     const title = item.querySelector(".note-item__title");
@@ -251,6 +297,40 @@ function renderNotes() {
   });
 
   list.appendChild(fragment);
+}
+
+async function handleReminderSnooze(button, reminderId) {
+  const notes = getStoredNotes();
+  const note = notes.find((entry) => entry.id === reminderId);
+  if (!note || !note.reminder) {
+    showToast("У этой заметки нет активного напоминания.", "warning");
+    return;
+  }
+
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = "Откладываем...";
+
+  try {
+    const payload = await snoozeReminder(note);
+    const reminderTime = normalizeReminderValue(payload.reminderTime);
+    if (!reminderTime) {
+      throw new Error("Missing reminder time in snooze response");
+    }
+
+    updateStoredReminderTime(reminderId, reminderTime);
+    renderNotes();
+    void refreshLocalReminderTimers();
+    showToast(`Напоминание перенесено на ${formatDisplayDate(reminderTime)}.`, "info");
+  } catch (error) {
+    console.error("Failed to snooze reminder", error);
+    showToast("Не удалось отложить напоминание на 5 минут.", "error");
+  } finally {
+    if (button.isConnected) {
+      button.disabled = false;
+      button.textContent = originalLabel;
+    }
+  }
 }
 
 function getStoredNotes() {
@@ -355,6 +435,23 @@ function saveNotes(notes) {
   localStorage.setItem(NOTES_STORAGE_KEY, JSON.stringify(notes));
 }
 
+function updateStoredReminderTime(reminderId, reminderTime) {
+  const notes = getStoredNotes();
+  const updatedNotes = notes.map((note) => {
+    if (note.id !== reminderId) {
+      return note;
+    }
+
+    return {
+      ...note,
+      reminder: reminderTime,
+    };
+  });
+
+  saveNotes(updatedNotes);
+  rememberReminderDelivery(reminderId);
+}
+
 function handleStorageSync(event) {
   if (event.key !== NOTES_STORAGE_KEY) {
     return;
@@ -362,6 +459,7 @@ function handleStorageSync(event) {
 
   if (state.currentPage === "home") {
     renderNotes();
+    void refreshLocalReminderTimers();
     showToast("Список заметок обновлен из другой вкладки.", "info");
   }
 }
@@ -375,6 +473,9 @@ function handleServiceWorkerMessage(event) {
   if (message.type === "push-received") {
     const payload = message.payload || {};
     console.info("Service worker received push payload", payload);
+    if (payload.reminderId) {
+      rememberReminderDelivery(payload.reminderId);
+    }
 
     if (document.visibilityState === "visible" && payload.reminderId && payload.title) {
       showToast(`Напоминание: ${payload.title}`, "info");
@@ -960,6 +1061,8 @@ async function syncFutureRemindersWithServer() {
     if (failed > 0) {
       console.warn(`Failed to sync ${failed} reminder(s) with the server.`);
     }
+
+    await refreshLocalReminderTimers();
   })();
 
   try {
@@ -979,6 +1082,129 @@ async function scheduleReminder(note) {
     text: note.text,
     reminderTime: note.reminder,
   });
+}
+
+async function snoozeReminder(note) {
+  try {
+    return await postJSON("/api/reminders/snooze", { reminderId: note.id });
+  } catch (error) {
+    if (!isReminderNotFoundError(error)) {
+      throw error;
+    }
+
+    const currentReminderTime = normalizeReminderValue(note.reminder) || 0;
+    const rescheduledReminderTime = Math.max(Date.now(), currentReminderTime) + SNOOZE_DELAY_MS;
+    const updatedNote = {
+      ...note,
+      reminder: rescheduledReminderTime,
+    };
+
+    await scheduleReminder(updatedNote);
+    return {
+      reminderId: note.id,
+      reminderTime: rescheduledReminderTime,
+      status: "rescheduled",
+    };
+  }
+}
+
+async function refreshLocalReminderTimers() {
+  const notes = getStoredNotes();
+  const futureNotes = notes.filter((note) => note.reminder && note.reminder > Date.now());
+  const futureIDs = new Set(futureNotes.map((note) => note.id));
+
+  for (const [noteID, timerEntry] of state.localReminderTimers.entries()) {
+    if (futureIDs.has(noteID)) {
+      continue;
+    }
+
+    window.clearTimeout(timerEntry.timeoutId);
+    state.localReminderTimers.delete(noteID);
+  }
+
+  for (const note of futureNotes) {
+    const reminderTime = normalizeReminderValue(note.reminder);
+    if (!reminderTime) {
+      continue;
+    }
+
+    const existing = state.localReminderTimers.get(note.id);
+    if (existing && existing.reminderTime === reminderTime) {
+      continue;
+    }
+    if (existing) {
+      window.clearTimeout(existing.timeoutId);
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      state.localReminderTimers.delete(note.id);
+      void deliverLocalReminderFallback(note.id);
+    }, Math.max(reminderTime - Date.now() + LOCAL_REMINDER_GRACE_MS, 0));
+
+    state.localReminderTimers.set(note.id, { reminderTime, timeoutId });
+  }
+}
+
+async function deliverLocalReminderFallback(reminderId) {
+  const note = getStoredNotes().find((entry) => entry.id === reminderId);
+  if (!note || !note.reminder) {
+    return;
+  }
+
+  const reminderTime = normalizeReminderValue(note.reminder);
+  if (!reminderTime) {
+    return;
+  }
+  if (reminderTime > Date.now()) {
+    await refreshLocalReminderTimers();
+    return;
+  }
+  if (hasRecentReminderDelivery(reminderId)) {
+    return;
+  }
+
+  rememberReminderDelivery(reminderId);
+  await showLocalReminderAlert(note);
+}
+
+async function showLocalReminderAlert(note) {
+  const title = "Напоминание";
+  const body = note.text;
+
+  if (document.visibilityState === "visible") {
+    showToast(`Напоминание: ${body}`, "info");
+    return;
+  }
+
+  if ("Notification" in window && Notification.permission === "granted") {
+    try {
+      const registration = await registerServiceWorker();
+      if (registration && typeof registration.showNotification === "function") {
+        await registration.showNotification(title, {
+          body,
+          icon: "/icons/icon-192.png",
+          badge: "/icons/favicon-64x64.png",
+          data: {
+            url: "/",
+            reminderId: note.id,
+          },
+          actions: [{ action: "snooze", title: "Отложить на 5 минут" }],
+        });
+        return;
+      }
+    } catch (error) {
+      console.error("Failed to show local reminder notification", error);
+    }
+
+    try {
+      new Notification(title, { body });
+      return;
+    } catch (error) {
+      console.error("Failed to show Notification API reminder", error);
+    }
+  }
+
+  showToast(`Напоминание: ${body}`, "info");
 }
 
 function generateId() {
@@ -1115,6 +1341,39 @@ async function postJSON(url, payload) {
   }
 
   return response.json();
+}
+
+function isReminderNotFoundError(error) {
+  return Boolean(error && typeof error.message === "string" && error.message.includes("reminder not found"));
+}
+
+function rememberReminderDelivery(reminderId) {
+  if (!reminderId) {
+    return;
+  }
+
+  const now = Date.now();
+  state.reminderDeliveries.set(reminderId, now);
+
+  for (const [id, deliveredAt] of state.reminderDeliveries.entries()) {
+    if (now - deliveredAt > RECENT_REMINDER_DELIVERY_MS) {
+      state.reminderDeliveries.delete(id);
+    }
+  }
+}
+
+function hasRecentReminderDelivery(reminderId) {
+  const deliveredAt = state.reminderDeliveries.get(reminderId);
+  if (!deliveredAt) {
+    return false;
+  }
+
+  if (Date.now() - deliveredAt > RECENT_REMINDER_DELIVERY_MS) {
+    state.reminderDeliveries.delete(reminderId);
+    return false;
+  }
+
+  return true;
 }
 
 async function ensureServerSubscription(subscription, force = false) {

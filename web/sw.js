@@ -1,5 +1,5 @@
-const APP_SHELL_CACHE = "app-shell-v10";
-const DYNAMIC_CACHE = "dynamic-content-v10";
+const APP_SHELL_CACHE = "app-shell-v11";
+const DYNAMIC_CACHE = "dynamic-content-v11";
 const HOME_FALLBACK = "/content/home.html";
 
 const APP_SHELL_ASSETS = [
@@ -63,7 +63,7 @@ self.addEventListener("fetch", (event) => {
   }
 
   if (isAppShellRequest(url.pathname)) {
-    event.respondWith(cacheFirst(request));
+    event.respondWith(shouldPreferNetwork(url.pathname) ? networkFirst(request) : cacheFirst(request));
   }
 });
 
@@ -111,6 +111,10 @@ self.addEventListener("pushsubscriptionchange", (event) => {
 
 function isAppShellRequest(pathname) {
   return pathname === "/" || APP_SHELL_ASSETS.includes(pathname) || pathname.startsWith("/icons/");
+}
+
+function shouldPreferNetwork(pathname) {
+  return ["/", "/index.html", "/styles.css", "/app.js", "/sw.js", "/manifest.json"].includes(pathname);
 }
 
 async function cacheFirst(request) {
